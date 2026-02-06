@@ -24,8 +24,13 @@ jobs:
         key: ${{ secrets.SSH_PRIVATE_KEY }}
         port: ${{ secrets.PORT }}
         script: |
+          echo "Je suis connecté sur la VM"
           whoami
+          echo "Création du premier dossier"
           mkdir -p /root/test-github-actions
+          echo "Création du deuxième dossier"
+          mkdir -p /root/test-github-actions-2
+          echo "Liste des dossiers dans /root"
           ls -la /root
 
   build:
