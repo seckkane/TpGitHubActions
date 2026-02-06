@@ -18,12 +18,13 @@ jobs:
     steps:
     - name: Create Folder on remote vm
       uses: appleboy/ssh-action@v1
-      with:
+      wils -lath:
         host: ${{ secrets.HOST }}
         username: ${{ secrets.USERNAME }}
         key: ${{ secrets.SSH_PRIVATE_KEY }}
         port: ${{ secrets.PORT }}
         script: |
+          set -x           # active le "mode debug", affiche chaque commande avant exécution
           echo "Je suis connecté sur la VM"
           whoami
           echo "Création du premier dossier"
