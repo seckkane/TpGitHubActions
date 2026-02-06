@@ -10,13 +10,26 @@ name: Java CI with Maven
 
 on:
   push:
-    branches: [ "main" ]
-
+    branches: [ "main", "develop" ]
+  workflow_dispatch:
 jobs:
-  build:
-
+  Create-Folder:
     runs-on: ubuntu-latest
+    steps:
+    - name: Create Folder on remote vm
+      uses: appleboy/ssh-action@v1
+      with:
+        host: ${{ secrets.HOST }}
+        username: ${{ secrets.USERNAME }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        port: ${{ secrets.PORT }}
+        script: |
+          whoami
+          mkdir -p /root/test-github-actions
+          ls -la /root
 
+  build:
+    runs-on: ubuntu-latest
     steps:
     - name: Téléchargement de sources
       uses: actions/checkout@v4
@@ -27,4 +40,4 @@ jobs:
         distribution: 'temurin'
         cache: maven
     - name: Build with Maven
-      run: mvn -Dmaven.tests.skyp=true -B package --file pom.xml
+      run: mvn -Dmaven.test.skyp=true -B package --file pom.xml
