@@ -1,4 +1,4 @@
-name: Java CI with Maven
+name: Java CI + Deploy Spring Boot
 
 on:
   push:
@@ -6,10 +6,39 @@ on:
   workflow_dispatch:
 
 jobs:
-  Create-Folder:
+  build-and-deploy:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Create Folder on remote VM
+      # 1️⃣ Récupérer le code
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      # 2️⃣ Installer Java pour le build (sur GitHub runner)
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      # 3️⃣ Build du JAR
+      - name: Build with Maven
+        run: mvn -DskipTests=true -B package
+
+      # 4️⃣ Copier le JAR vers la VM
+      - name: Copy JAR to VM
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.PORT }}
+          source: "target/*.jar"
+          target: "/opt/apps/tpgithubactions"
+
+      # 5️⃣ Lancer l'application sur la VM
+      - name: Run Spring Boot on VM
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.HOST }}
@@ -17,26 +46,12 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.PORT }}
           script: |
-            set -x                     # active le "mode debug"
-            echo "Je suis connecté sur la VM"
-            whoami
-            echo "Création du premier dossier"
-            mkdir -p /root/test-github-actions
-            echo "Création du deuxième dossier"
-            mkdir -p /root/test-github-actions-2
-            echo "Liste des dossiers dans /root"
-            ls -la /root
-
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-          cache: maven
-      - name: Build with Maven
-        run: mvn -DskipTests=true -B package --file pom.xml
+            set -x
+            mkdir -p /opt/apps/tpgithubactions
+            cd /opt/apps/tpgithubactions
+            
+            echo "Arrêt ancienne version (si existe)"
+            pkill -f tpgithubactions || true
+            
+            echo "Démarrage nouvelle version"
+            nohup java -jar *.jar > app.log 2>&1 &
