@@ -62,7 +62,7 @@ jobs:
     needs: build-and-deploy
 
     steps:
-      - name: Script for run app on remote VM
+      - name: Run Spring Boot app on VM
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.HOST }}
@@ -71,5 +71,9 @@ jobs:
           port: ${{ secrets.PORT }}
           script: |
             set -x
-            ln -sf /opt/applications/java/TestGithubActions/target/app.jar /etc/init.d/testGitActions
-            service start testGitActions
+            cd /opt/applications/java/TestGithubActions/target
+            echo "Arrêt ancienne version (si existe)"
+            pkill -f app.jar || true
+  
+            echo "Démarrage application"
+            nohup java -jar app.jar > app.log 2>&1 &
