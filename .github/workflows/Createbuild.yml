@@ -71,9 +71,15 @@ jobs:
           port: ${{ secrets.PORT }}
           script: |
             set -x
-            cd /opt/applications/java/TestGithubActions/target
-            echo "Arrêt ancienne version (si existe)"
-            pkill -f app.jar || true
-            echo "Démarrage application"
-            nohup java -jar app.jar > app.log 2>&1 &
+            # Vérifie si un processus avec "app.jar" existe
+            if pgrep -f "app.jar" > /dev/null; then
+            echo "Ancienne version détectée. Arrêt en cours..."
+            pkill -f "app.jar"
+            
+            # On attend que le processus disparaisse réellement
+            while pgrep -f "app.jar" > /dev/null; do sleep 1; done
+            echo "Ancienne version arrêtée."
+            else
+            echo "Aucune ancienne version en cours d'exécution."
+            fi
 
