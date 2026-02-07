@@ -56,3 +56,20 @@ jobs:
           port: ${{ secrets.PORT }}
           source: "target/app.jar"
           target: "/opt/applications/java/TestGithubActions"
+
+  RunScript:
+    runs-on: ubuntu-latest
+    needs: build-and-deploy
+
+    steps:
+      - name: Script for run app on remote VM
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.PORT }}
+          script: |
+            set -x
+            ln -sf /opt/applications/java/TestGithubActions/target/app.jar" /etc/init.d/testGitActions
+            service start testGitActions
