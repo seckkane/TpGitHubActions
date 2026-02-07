@@ -47,11 +47,18 @@ jobs:
           port: ${{ secrets.PORT }}
           script: |
             set -x
-            mkdir -p /opt/apps/tpgithubactions
-            cd /opt/apps/tpgithubactions
+            cd /opt/apps/tpgithubactions/target
+            
+            echo "Contenu du dossier target"
+            ls -l
             
             echo "Arrêt ancienne version (si existe)"
-            pkill -f tpgithubactions || true
+            pgrep -f tpgithubactions && pkill -f tpgithubactions || echo "Aucun process à arrêter"
             
-            echo "Démarrage nouvelle version"
+            echo "Lancement application"
             nohup java -jar *.jar > app.log 2>&1 &
+            
+            sleep 3
+            echo "Process Java en cours :"
+            ps -ef | grep java | grep -v grep
+
