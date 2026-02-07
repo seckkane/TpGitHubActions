@@ -75,5 +75,5 @@ jobs:
             echo "Arrêt ancienne version (si existe)"
             #pkill -f app.jar || true
             echo "Démarrage application"
-            #nohup java -jar app.jar > app.log 2>&1 &
+            nohup java -jar app.jar > app.log 2>&1 &
 
