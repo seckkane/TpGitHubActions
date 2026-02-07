@@ -48,17 +48,19 @@ jobs:
           script: |
             set -x
             cd /opt/apps/tpgithubactions/target
-            
-            echo "Contenu du dossier target"
-            ls -l
-            
-            echo "Arrêt ancienne version (si existe)"
-            pgrep -f tpgithubactions && pkill -f tpgithubactions || echo "Aucun process à arrêter"
-            
-            echo "Lancement application"
-            nohup java -jar *.jar > app.log 2>&1 &
-            
-            sleep 3
-            echo "Process Java en cours :"
-            ps -ef | grep java | grep -v grep
+
+            echo "Recherche ancienne version"
+            if pgrep -f TpGitHubActions > /dev/null; then
+              echo "Ancienne version trouvée, arrêt..."
+              pkill -f TpGitHubActions || true
+              sleep 2
+            else
+              echo "Aucune ancienne version en cours"
+            fi
+
+            echo "Démarrage application"
+            nohup java -jar TpGitHubActions-0.0.1-SNAPSHOT.jar \
+              > ../app.log 2>&1 &
+
+
 
