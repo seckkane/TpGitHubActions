@@ -74,6 +74,6 @@ jobs:
             cd /opt/applications/java/TestGithubActions/target
             echo "Arrêt ancienne version (si existe)"
             pkill -f app.jar || true
-  
             echo "Démarrage application"
             nohup java -jar app.jar > app.log 2>&1 &
+
