@@ -71,5 +71,5 @@ jobs:
           port: ${{ secrets.PORT }}
           script: |
             set -x
-            ln -sf /opt/applications/java/TestGithubActions/target/app.jar" /etc/init.d/testGitActions
+            ln -sf /opt/applications/java/TestGithubActions/target/app.jar /etc/init.d/testGitActions
             service start testGitActions
