@@ -771,4 +771,4 @@ jobs:
           echo "🌍 URL      : http://207.180.240.150:$PORT"
           echo "👤 Auteur   : ${{ github.actor }}"
           echo "📝 Commit   : ${{ github.sha }}"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ISK"
