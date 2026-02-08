@@ -22,7 +22,10 @@ public class TestController {
                        new Avis(7, "keep taking a break again", 0),
                        new Avis(8, "keep plying clothes", 1),
                        new Avis(9, "keep taking a break again", 0),
-                       new Avis(10, "no way ", 0));
+                       new Avis(10, "no way ", 0),
+                       new Avis(11, "Before going to bed", 0),
+                       new Avis(12, "keep taking a break again", 0),
+                       new Avis(13, "bed now", 0));
 
     }
 }
