@@ -39,7 +39,7 @@ jobs:
       - name: 📥 Checkout source code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Pour avoir l'historique git complet
+          fetch-depth: 0
 
       # --------------------------------------------------------------------------
       # Configuration Java
@@ -199,7 +199,7 @@ jobs:
           echo "✅ Artefact vérifié (taille: $JAR_SIZE)"
 
       # --------------------------------------------------------------------------
-      # Création du répertoire distant si nécessaire
+      # Création du répertoire distant
       # --------------------------------------------------------------------------
       - name: 📁 Ensure remote directory exists
         uses: appleboy/ssh-action@v1
@@ -226,21 +226,60 @@ jobs:
               echo "❌ Erreur: Pas de permission d'écriture sur $APP_DIR"
               exit 1
             fi
+            
+            echo "✅ Répertoire prêt pour le déploiement"
 
       # --------------------------------------------------------------------------
-      # Transfert du JAR vers la VM
+      # Transfert du JAR vers la VM avec SCP natif
       # --------------------------------------------------------------------------
-      - name: 📤 Copy JAR to remote VM
-        uses: appleboy/scp-action@v1
+      - name: 📤 Transfer JAR to remote VM
+        run: |
+          # Préparation de la clé SSH
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          
+          # Ajout du host aux known_hosts
+          ssh-keyscan -p ${{ secrets.PORT }} ${{ secrets.HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+          
+          # Transfert du fichier
+          echo "📤 Transfert de app.jar vers la VM..."
+          scp -i ~/.ssh/deploy_key \
+              -P ${{ secrets.PORT }} \
+              -o StrictHostKeyChecking=no \
+              ./artifact/app.jar \
+              ${{ secrets.USERNAME }}@${{ secrets.HOST }}:${{ needs.configure.outputs.app-dir }}/app.jar
+          
+          echo "✅ Transfert terminé"
+          
+          # Nettoyage
+          rm -f ~/.ssh/deploy_key
+
+      # --------------------------------------------------------------------------
+      # Vérification du transfert
+      # --------------------------------------------------------------------------
+      - name: ✅ Verify transfer
+        uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.HOST }}
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.PORT }}
-          source: ./artifact/app.jar
-          target: ${{ needs.configure.outputs.app-dir }}/
-          strip_components: 1
-          overwrite: true
+          script: |
+            APP_DIR="${{ needs.configure.outputs.app-dir }}"
+            
+            echo "🔍 Vérification du fichier transféré..."
+            
+            if [ -f "$APP_DIR/app.jar" ]; then
+              JAR_SIZE=$(du -h "$APP_DIR/app.jar" | cut -f1)
+              echo "✅ Fichier présent: $APP_DIR/app.jar ($JAR_SIZE)"
+              ls -lh "$APP_DIR/app.jar"
+            else
+              echo "❌ ERREUR: Fichier non trouvé après le transfert"
+              echo "Contenu du répertoire $APP_DIR:"
+              ls -lah "$APP_DIR"
+              exit 1
+            fi
 
       # --------------------------------------------------------------------------
       # Arrêt de l'ancienne version
@@ -319,11 +358,16 @@ jobs:
             echo "📄 Log           : $LOG_FILE"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             
-            # Vérification du JAR
+            # Vérification finale du JAR
             if [ ! -f app.jar ]; then
-              echo "❌ Erreur: app.jar introuvable dans $APP_DIR"
+              echo "❌ ERREUR CRITIQUE: app.jar introuvable dans $APP_DIR"
+              echo "Contenu du répertoire:"
+              ls -lah
               exit 1
             fi
+            
+            JAR_SIZE=$(du -h app.jar | cut -f1)
+            echo "✅ JAR trouvé: $JAR_SIZE"
             
             # Démarrage avec options JVM optimisées
             nohup java \
@@ -440,7 +484,7 @@ jobs:
             
               # Recherche du message de démarrage réussi
               if tail -100 $LOG_FILE | grep -q "Started.*Application in"; then
-                STARTUP_TIME=$(tail -100 $LOG_FILE | grep "Started.*Application in" | tail -1 | grep -oP '\d+\.\d+(?= seconds)')
+                STARTUP_TIME=$(tail -100 $LOG_FILE | grep "Started.*Application in" | tail -1 | grep -oP '\d+\.\d+(?= seconds)' || echo "N/A")
                 echo "   ✅ Application démarrée avec succès"
                 echo "   ⚡ Temps de démarrage: ${STARTUP_TIME}s"
               else
@@ -537,7 +581,7 @@ jobs:
             fi
 
   # ============================================================================
-  # JOB 5 : NOTIFICATION (optionnel)
+  # JOB 5 : NOTIFICATION
   # Envoyer des notifications en cas de succès/échec
   # ============================================================================
   notify:
