@@ -367,7 +367,7 @@ jobs:
             ls -t *.log 2>/dev/null | tail -n +6 | xargs rm -f 2>/dev/null || true
 
       # --------------------------------------------------------------------------
-      # Démarrage de la nouvelle version
+      # Démarrage de la nouvelle version avec logs immédiats
       # --------------------------------------------------------------------------
       - name: ▶️  Start new application
         uses: appleboy/ssh-action@v1
@@ -409,7 +409,24 @@ jobs:
             JAR_SIZE=$(du -h app.jar | cut -f1)
             echo "✅ JAR trouvé: $JAR_SIZE"
             
+            # Test que le JAR est exécutable
+            echo ""
+            echo "🔍 Test de validité du JAR..."
+            if ! java -jar app.jar --version 2>&1 | head -5; then
+              echo "⚠️  Commande --version non supportée, test avec unzip..."
+              if ! unzip -t app.jar > /dev/null 2>&1; then
+                echo "❌ ERREUR: Le fichier JAR est corrompu"
+                exit 1
+              fi
+            fi
+            echo "✅ JAR valide"
+            echo ""
+            
+            # Suppression de l'ancien log pour un nouveau démarrage propre
+            rm -f $LOG_FILE
+            
             # Démarrage avec options JVM optimisées
+            echo "🚀 Lancement de Java..."
             nohup java \
               -Xms256m \
               -Xmx512m \
@@ -423,11 +440,37 @@ jobs:
             NEW_PID=$!
             echo "🆔 PID du nouveau processus: $NEW_PID"
             
-            # Sauvegarde du PID pour monitoring futur
+            # Vérification immédiate que le processus existe
+            sleep 1
+            if ! kill -0 $NEW_PID 2>/dev/null; then
+              echo "❌ ERREUR: Le processus s'est arrêté immédiatement"
+              echo ""
+              echo "📋 Logs de démarrage:"
+              cat $LOG_FILE
+              exit 1
+            fi
+            
+            # Sauvegarde du PID
             echo $NEW_PID > app.pid
             
-            echo "⏳ Attente du démarrage (10 secondes)..."
-            sleep 10
+            echo "⏳ Attente du démarrage (15 secondes)..."
+            sleep 15
+            
+            # Vérification que le processus tourne toujours
+            if ! kill -0 $NEW_PID 2>/dev/null; then
+              echo "❌ ERREUR: Le processus s'est arrêté pendant le démarrage"
+              echo ""
+              echo "📋 Logs complets:"
+              cat $LOG_FILE
+              exit 1
+            fi
+            
+            echo "✅ Processus toujours actif après 15 secondes"
+            
+            # Affichage des premières lignes du log
+            echo ""
+            echo "📋 Premières lignes du log:"
+            head -20 $LOG_FILE
 
   # ============================================================================
   # JOB 4 : VERIFICATION POST-DEPLOIEMENT
@@ -439,6 +482,37 @@ jobs:
     needs: [configure, deploy]
 
     steps:
+      # --------------------------------------------------------------------------
+      # Affichage des logs AVANT les vérifications
+      # --------------------------------------------------------------------------
+      - name: 📋 Display startup logs
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.PORT }}
+          script: |
+            APP_DIR="${{ needs.configure.outputs.app-dir }}"
+            LOG_FILE="${{ needs.configure.outputs.log-file }}"
+            
+            cd $APP_DIR
+            
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "📋 LOGS DE DEMARRAGE (50 premières lignes)"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            
+            if [ -f $LOG_FILE ]; then
+              head -50 $LOG_FILE
+            else
+              echo "❌ Fichier log introuvable: $LOG_FILE"
+              echo "Contenu du répertoire:"
+              ls -lah
+            fi
+            
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
       # --------------------------------------------------------------------------
       # Vérification système (processus, port, fichiers)
       # --------------------------------------------------------------------------
@@ -463,17 +537,49 @@ jobs:
             # 1️⃣ Vérification du processus Java
             echo ""
             echo "1️⃣  Processus Java:"
-            if ps aux | grep "[j]ava -jar app.jar" | grep -q "server.port=$PORT"; then
-              PID=$(ps aux | grep "[j]ava -jar app.jar" | grep "server.port=$PORT" | awk '{print $2}')
-              UPTIME=$(ps -p $PID -o etime= | tr -d ' ')
-              MEM=$(ps -p $PID -o rss= | awk '{printf "%.2f MB", $1/1024}')
-              echo "   ✅ Processus actif"
-              echo "   🆔 PID: $PID"
-              echo "   ⏱️  Uptime: $UPTIME"
-              echo "   💾 Mémoire: $MEM"
+            
+            # Recherche du processus par PID sauvegardé
+            if [ -f app.pid ]; then
+              SAVED_PID=$(cat app.pid)
+              echo "   📋 PID sauvegardé: $SAVED_PID"
+            
+              if kill -0 $SAVED_PID 2>/dev/null; then
+                UPTIME=$(ps -p $SAVED_PID -o etime= | tr -d ' ')
+                MEM=$(ps -p $SAVED_PID -o rss= | awk '{printf "%.2f MB", $1/1024}')
+                CMD=$(ps -p $SAVED_PID -o cmd= | head -c 80)
+                echo "   ✅ Processus actif (PID: $SAVED_PID)"
+                echo "   ⏱️  Uptime: $UPTIME"
+                echo "   💾 Mémoire: $MEM"
+                echo "   📝 Commande: $CMD"
+              else
+                echo "   ❌ Le processus PID $SAVED_PID n'existe plus"
+                echo ""
+                echo "   🔍 Recherche d'autres processus Java..."
+                ps aux | grep "[j]ava" || echo "   Aucun processus Java trouvé"
+                echo ""
+                echo "   📋 Dernières lignes du log:"
+                tail -30 $LOG_FILE
+                exit 1
+              fi
             else
-              echo "   ❌ ERREUR: Aucun processus Java trouvé"
-              exit 1
+              # Recherche alternative par port
+              if ps aux | grep "[j]ava -jar app.jar" | grep -q "server.port=$PORT"; then
+                PID=$(ps aux | grep "[j]ava -jar app.jar" | grep "server.port=$PORT" | awk '{print $2}')
+                UPTIME=$(ps -p $PID -o etime= | tr -d ' ')
+                MEM=$(ps -p $PID -o rss= | awk '{printf "%.2f MB", $1/1024}')
+                echo "   ✅ Processus actif (PID: $PID)"
+                echo "   ⏱️  Uptime: $UPTIME"
+                echo "   💾 Mémoire: $MEM"
+              else
+                echo "   ❌ ERREUR: Aucun processus Java trouvé"
+                echo ""
+                echo "   🔍 Tous les processus Java sur le système:"
+                ps aux | grep "[j]ava" || echo "   Aucun"
+                echo ""
+                echo "   📋 Contenu complet du log:"
+                cat $LOG_FILE 2>/dev/null || echo "   Log introuvable"
+                exit 1
+              fi
             fi
             
             # 2️⃣ Vérification du port
@@ -484,6 +590,9 @@ jobs:
               lsof -i:$PORT | grep LISTEN | awk '{print "   🔌 " $1 " (PID: " $2 ")"}'
             else
               echo "   ❌ ERREUR: Port $PORT non accessible"
+              echo ""
+              echo "   🔍 Tous les ports en écoute:"
+              lsof -i -P -n | grep LISTEN | head -20
               exit 1
             fi
             
@@ -510,7 +619,7 @@ jobs:
             
             # 4️⃣ Analyse des logs
             echo ""
-            echo "4️⃣  Analyse des logs (dernières 30 lignes):"
+            echo "4️⃣  Analyse des logs:"
             if [ -f $LOG_FILE ]; then
               # Recherche d'erreurs critiques
               if tail -100 $LOG_FILE | grep -qi "error\|exception\|failed"; then
@@ -528,7 +637,9 @@ jobs:
                 echo "   ✅ Application démarrée avec succès"
                 echo "   ⚡ Temps de démarrage: ${STARTUP_TIME}s"
               else
-                echo "   ⏳ Démarrage en cours..."
+                echo "   ⏳ Message de démarrage non trouvé"
+                echo "   📋 Dernières 10 lignes du log:"
+                tail -10 $LOG_FILE | sed 's/^/      /'
               fi
             fi
             
@@ -553,8 +664,8 @@ jobs:
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo ""
             
-            # Tentatives de connexion (max 5)
-            MAX_ATTEMPTS=5
+            # Tentatives de connexion (max 10 pour Spring Boot qui peut être long)
+            MAX_ATTEMPTS=10
             ATTEMPT=1
             SUCCESS=false
             
@@ -570,8 +681,8 @@ jobs:
                 SUCCESS=true
                 break
               else
-                echo "   ⏳ Pas de réponse, attente de 3 secondes..."
-                sleep 3
+                echo "   ⏳ Pas de réponse, attente de 5 secondes..."
+                sleep 5
               fi
             
               ATTEMPT=$((ATTEMPT + 1))
@@ -596,7 +707,7 @@ jobs:
       # --------------------------------------------------------------------------
       # Affichage des logs finaux (si échec)
       # --------------------------------------------------------------------------
-      - name: 📋 Display logs on failure
+      - name: 📋 Display full logs on failure
         if: failure()
         uses: appleboy/ssh-action@v1
         with:
@@ -611,14 +722,20 @@ jobs:
             cd $APP_DIR
             
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "📋 LOGS DE L'APPLICATION (50 dernières lignes)"
+            echo "📋 LOGS COMPLETS DE L'APPLICATION"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             
             if [ -f $LOG_FILE ]; then
-              tail -50 $LOG_FILE
+              cat $LOG_FILE
             else
-              echo "❌ Fichier log introuvable"
+              echo "❌ Fichier log introuvable: $LOG_FILE"
+              echo ""
+              echo "Contenu du répertoire:"
+              ls -lah
             fi
+            
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
   # ============================================================================
   # JOB 5 : NOTIFICATION
