@@ -195,13 +195,20 @@ jobs:
             exit 1
           fi
           
+          # Vérification que c'est bien un fichier et non un dossier
+          if [ -d ./artifact/app.jar ]; then
+            echo "❌ Erreur: app.jar est un dossier, pas un fichier"
+            exit 1
+          fi
+          
           JAR_SIZE=$(du -h ./artifact/app.jar | cut -f1)
           echo "✅ Artefact vérifié (taille: $JAR_SIZE)"
+          file ./artifact/app.jar
 
       # --------------------------------------------------------------------------
-      # Création du répertoire distant
+      # Création et nettoyage du répertoire distant
       # --------------------------------------------------------------------------
-      - name: 📁 Ensure remote directory exists
+      - name: 📁 Prepare remote directory
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.HOST }}
@@ -211,15 +218,13 @@ jobs:
           script: |
             APP_DIR="${{ needs.configure.outputs.app-dir }}"
             
-            echo "📁 Vérification du répertoire: $APP_DIR"
+            echo "🧹 Préparation du répertoire: $APP_DIR"
             
-            if [ ! -d "$APP_DIR" ]; then
-              echo "🆕 Création du répertoire..."
-              mkdir -p "$APP_DIR"
-              echo "✅ Répertoire créé"
-            else
-              echo "✅ Répertoire déjà existant"
-            fi
+            # Création du répertoire parent si nécessaire
+            mkdir -p "$APP_DIR"
+            
+            # Suppression des anciens fichiers/dossiers problématiques
+            rm -rf "$APP_DIR/app.jar" "$APP_DIR/artifact" "$APP_DIR/target"
             
             # Vérification des permissions
             if [ ! -w "$APP_DIR" ]; then
@@ -230,7 +235,7 @@ jobs:
             echo "✅ Répertoire prêt pour le déploiement"
 
       # --------------------------------------------------------------------------
-      # Transfert du JAR vers la VM avec SCP natif
+      # Transfert du JAR avec base64 (100% fiable)
       # --------------------------------------------------------------------------
       - name: 📤 Transfer JAR to remote VM
         run: |
@@ -242,13 +247,20 @@ jobs:
           # Ajout du host aux known_hosts
           ssh-keyscan -p ${{ secrets.PORT }} ${{ secrets.HOST }} >> ~/.ssh/known_hosts 2>/dev/null
           
-          # Transfert du fichier
+          # Affichage de diagnostic
+          echo "📦 Informations sur le fichier source:"
+          ls -lh ./artifact/app.jar
+          file ./artifact/app.jar
+          du -h ./artifact/app.jar
+          echo ""
+          
+          # Encodage et transfert via base64 (évite tous les problèmes de SCP)
           echo "📤 Transfert de app.jar vers la VM..."
-          scp -i ~/.ssh/deploy_key \
-              -P ${{ secrets.PORT }} \
+          base64 ./artifact/app.jar | ssh -i ~/.ssh/deploy_key \
+              -p ${{ secrets.PORT }} \
               -o StrictHostKeyChecking=no \
-              ./artifact/app.jar \
-              ${{ secrets.USERNAME }}@${{ secrets.HOST }}:${{ needs.configure.outputs.app-dir }}/app.jar
+              "${{ secrets.USERNAME }}@${{ secrets.HOST }}" \
+              "base64 -d > ${{ needs.configure.outputs.app-dir }}/app.jar"
           
           echo "✅ Transfert terminé"
           
@@ -269,17 +281,39 @@ jobs:
             APP_DIR="${{ needs.configure.outputs.app-dir }}"
             
             echo "🔍 Vérification du fichier transféré..."
+            echo ""
             
-            if [ -f "$APP_DIR/app.jar" ]; then
-              JAR_SIZE=$(du -h "$APP_DIR/app.jar" | cut -f1)
-              echo "✅ Fichier présent: $APP_DIR/app.jar ($JAR_SIZE)"
-              ls -lh "$APP_DIR/app.jar"
-            else
-              echo "❌ ERREUR: Fichier non trouvé après le transfert"
+            # Vérification de l'existence
+            if [ ! -e "$APP_DIR/app.jar" ]; then
+              echo "❌ ERREUR: app.jar n'existe pas"
               echo "Contenu du répertoire $APP_DIR:"
               ls -lah "$APP_DIR"
               exit 1
             fi
+            
+            # Vérification que c'est un fichier (pas un dossier)
+            if [ -d "$APP_DIR/app.jar" ]; then
+              echo "❌ ERREUR: app.jar est un dossier, pas un fichier"
+              echo "Contenu de app.jar:"
+              ls -lah "$APP_DIR/app.jar"
+              exit 1
+            fi
+            
+            # Vérification que c'est un fichier
+            if [ ! -f "$APP_DIR/app.jar" ]; then
+              echo "❌ ERREUR: app.jar n'est pas un fichier régulier"
+              file "$APP_DIR/app.jar"
+              exit 1
+            fi
+            
+            # Affichage des informations
+            JAR_SIZE=$(du -h "$APP_DIR/app.jar" | cut -f1)
+            echo "✅ Fichier JAR transféré avec succès"
+            echo "   📁 Chemin: $APP_DIR/app.jar"
+            echo "   📦 Taille: $JAR_SIZE"
+            echo ""
+            ls -lh "$APP_DIR/app.jar"
+            file "$APP_DIR/app.jar"
 
       # --------------------------------------------------------------------------
       # Arrêt de l'ancienne version
@@ -363,6 +397,12 @@ jobs:
               echo "❌ ERREUR CRITIQUE: app.jar introuvable dans $APP_DIR"
               echo "Contenu du répertoire:"
               ls -lah
+              exit 1
+            fi
+            
+            # Vérification que c'est un fichier
+            if [ -d app.jar ]; then
+              echo "❌ ERREUR CRITIQUE: app.jar est un dossier"
               exit 1
             fi
             
