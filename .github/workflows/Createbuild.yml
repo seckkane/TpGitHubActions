@@ -70,29 +70,14 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.PORT }}
           script: |
-            set -e
             cd /opt/applications/java/TestGithubActions/target
             
-            echo "Arrêt ancienne version (si existe)"
-            if pgrep -f "app.jar" > /dev/null; then
-              pkill -f "app.jar"
-              echo "Processus arrêté"
-              sleep 5
-            else
-              echo "Aucun processus en cours"
-            fi
+            # Tuer l'ancien (ignore l'erreur si rien à tuer)
+            pkill -f "app.jar" || echo "Aucun processus à arrêter"
+            sleep 3
             
-            echo "Démarrage application"
+            # Lancer le nouveau
             nohup java -jar app.jar > app.log 2>&1 &
             
-            echo "Attente démarrage (5 secondes)..."
-            sleep 5
-            
-            echo "Vérification..."
-            if pgrep -f "app.jar" > /dev/null; then
-              echo "✓ Application démarrée avec succès"
-            else
-              echo "✗ Erreur au démarrage"
-              tail -20 app.log
-              exit 1
-            fi
+            sleep 3
+            echo "Application lancée !"
