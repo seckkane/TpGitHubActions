@@ -77,6 +77,7 @@ jobs:
           script: |
             rsync -av --progress app.jar ${{ secrets.APP_DIR }}/
 
+
       # Redémarrage DEV
       - name: Restart DEV application
         uses: appleboy/ssh-action@v1
