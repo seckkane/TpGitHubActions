@@ -19,6 +19,8 @@ public class TestController {
                        new Avis(4, "kill process make me lose many time", 1),
                        new Avis(5, "keep taking a break", 0),
                        new Avis(6, "Keep having a visit now", 0),
-                       new Avis(7, "keep taking a break again", 0));
+                       new Avis(7, "keep taking a break again", 0),
+                       new Avis(8, "keep plying clothes", 1),
+                       new Avis(9, "keep taking a break again", 0));
     }
 }
