@@ -2,7 +2,7 @@ name: Java CI/CD with Maven
 
 on:
   push:
-    branches: [ "main", "develop" ]
+    branches: ["main", "develop"]
   workflow_dispatch:
 
 jobs:
@@ -65,7 +65,7 @@ jobs:
           target: ${{ github.ref == 'refs/heads/develop' && '/opt/apps/dev/java/TestGithubActions' || '/opt/apps/prod/java/TestGithubActions' }}
 
   # =========================
-  # 3️⃣ Lancer l'application sur la VM
+  # 3️⃣ Lancer l'application sur la VM avec port dynamique
   # =========================
   RunScript:
     runs-on: ubuntu-latest
@@ -79,10 +79,12 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.PORT }}
           script: |
-            # --------------------------------------
-            # Choisir l'environnement en fonction de la branche
-            # --------------------------------------
-            if [ "${GITHUB_REF}" == "refs/heads/develop" ]; then
+            # =========================
+            # Déterminer l'environnement en fonction de la branche
+            # =========================
+            BRANCH_NAME=$(basename $GITHUB_REF)
+
+            if [ "$BRANCH_NAME" = "develop" ]; then
               ENV_DIR="/opt/apps/dev/java/TestGithubActions"
               PORT=9091
               LOG_FILE="app-dev.log"
@@ -94,17 +96,54 @@ jobs:
 
             cd $ENV_DIR
 
-            # --------------------------------------
-            # Arrêter l'application si elle tourne déjà
-            # --------------------------------------
+            # =========================
+            # Arrêter l'application si elle tourne déjà sur ce port
+            # =========================
             lsof -ti:$PORT | xargs kill -9 2>/dev/null || echo "Aucun processus à arrêter"
 
             sleep 2
 
-            # --------------------------------------
-            # Lancer la nouvelle application
-            # --------------------------------------
-            nohup java -jar app.jar --server.port=$PORT > $LOG_FILE 2>&1 &
+            # =========================
+            # Lancer la nouvelle application avec port dynamique
+            # =========================
+            nohup java -jar app.jar --SERVER_PORT=$PORT > $LOG_FILE 2>&1 &
 
             sleep 2
             echo "Application lancée sur le port $PORT avec log $LOG_FILE"
+
+  # =========================
+  # 4️⃣ Vérification automatique que l'app écoute sur le bon port
+  # =========================
+  VerifyApp:
+    runs-on: ubuntu-latest
+    needs: RunScript
+    steps:
+      - name: Verify DEV/PROD port and logs
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.PORT }}
+          script: |
+            BRANCH_NAME=$(basename $GITHUB_REF)
+
+            if [ "$BRANCH_NAME" = "develop" ]; then
+              PORT=9091
+              ENV_DIR="/opt/apps/dev/java/TestGithubActions"
+              LOG_FILE="app-dev.log"
+            else
+              PORT=9092
+              ENV_DIR="/opt/apps/prod/java/TestGithubActions"
+              LOG_FILE="app-prod.log"
+            fi
+
+            # Vérifier si le port est occupé
+            if ss -tulnp | grep -q ":$PORT"; then
+              echo "✅ Application en écoute sur le port $PORT"
+            else
+              echo "❌ Application NON démarrée sur le port $PORT"
+            fi
+
+            # Afficher les 10 dernières lignes du log
+            tail -n 10 $ENV_DIR/$LOG_FILE
