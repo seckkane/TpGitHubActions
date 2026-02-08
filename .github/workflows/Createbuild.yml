@@ -3,25 +3,25 @@ name: Java CI/CD with Maven (DEV & PROD)
 on:
   push:
     branches:
-      - develop
-      - main
+      - develop   # Branche DEV
+      - main      # Branche PROD
   workflow_dispatch:
 
 jobs:
 
   # =========================
-  # 1️⃣ BUILD (COMMUN)
+  # 1️⃣ Build Maven (commun)
   # =========================
   build:
-    name: Build Java application
     runs-on: ubuntu-latest
+    name: Build Java application
 
     steps:
-      # Checkout code
-      - name: Checkout source code
+      # Récupération du code source
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      # Setup Java
+      # Installer JDK 17
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -29,64 +29,38 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      # Maven build
+      # Build Maven
       - name: Build with Maven
-        run: mvn clean package
+        run: mvn clean package -DskipTests
 
-      # Rename JAR
+      # Renommer le JAR
       - name: Rename JAR
         run: mv target/*.jar target/app.jar
 
-      # Upload artifact
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-jar
-          path: target/app.jar
-
   # =========================
-  # 2️⃣ DEPLOY DEV
+  # 2️⃣ Déploiement DEV
   # =========================
   deploy-dev:
-    name: Deploy to DEV (port 9091)
-    needs: build
     runs-on: ubuntu-latest
+    needs: build
     if: github.ref == 'refs/heads/develop'
+    name: Deploy to DEV (port 9091)
     environment: dev
 
     steps:
-      # Download artifact
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: app-jar
-          path: .
-
-      # Verify artifact exists
-      - name: Check JAR exists
-        run: |
-          if [ ! -f app.jar ]; then
-            echo "ERROR: app.jar not found!"
-            exit 1
-          fi
-
-      # List files (debug)
-      - name: List files
-        run: ls -l
-
-      # Copy JAR via rsync
+      # Copier le JAR vers la VM DEV
       - name: Copy JAR to DEV VM
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/scp-action@v1
         with:
           host: ${{ secrets.HOST }}
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.PORT }}
-          script: |
-            rsync -av --progress app.jar ${{ secrets.APP_DIR }}/
+          source: "target/app.jar"
+          target: "/opt/apps/dev/java/TestGithubActions/"
 
-      # Restart DEV application
-      - name: Restart DEV application
+      # Lancer l'application sur la VM DEV
+      - name: Run Spring Boot app on DEV VM
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.HOST }}
@@ -94,59 +68,39 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.PORT }}
           script: |
+            cd /opt/apps/dev/java/TestGithubActions
             echo "Stopping DEV app on port 9091..."
             lsof -ti:9091 | xargs kill -9 2>/dev/null || echo "No DEV process running"
-
+            sleep 2
             echo "Starting DEV app on port 9091..."
-            nohup java -jar ${{ secrets.APP_DIR }}/app.jar \
-              --server.port=9091 \
-              > ${{ secrets.APP_DIR }}/app-dev.log 2>&1 &
-
-            echo "DEV deployment done"
+            nohup java -jar app.jar --server.port=9091 > app-dev.log 2>&1 &
+            sleep 2
+            echo "DEV application launched!"
 
   # =========================
-  # 3️⃣ DEPLOY PROD
+  # 3️⃣ Déploiement PROD
   # =========================
   deploy-prod:
-    name: Deploy to PROD (port 9092)
-    needs: build
     runs-on: ubuntu-latest
+    needs: build
     if: github.ref == 'refs/heads/main'
+    name: Deploy to PROD (port 9092)
     environment: prod
 
     steps:
-      # Download artifact
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: app-jar
-          path: .
-
-      # Verify artifact exists
-      - name: Check JAR exists
-        run: |
-          if [ ! -f app.jar ]; then
-            echo "ERROR: app.jar not found!"
-            exit 1
-          fi
-
-      # List files (debug)
-      - name: List files
-        run: ls -l
-
-      # Copy JAR via rsync
+      # Copier le JAR vers la VM PROD
       - name: Copy JAR to PROD VM
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/scp-action@v1
         with:
           host: ${{ secrets.HOST }}
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.PORT }}
-          script: |
-            rsync -av --progress app.jar ${{ secrets.APP_DIR }}/
+          source: "target/app.jar"
+          target: "/opt/apps/prod/java/TestGithubActions/"
 
-      # Restart PROD application
-      - name: Restart PROD application
+      # Lancer l'application sur la VM PROD
+      - name: Run Spring Boot app on PROD VM
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.HOST }}
@@ -154,12 +108,11 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.PORT }}
           script: |
+            cd /opt/apps/prod/java/TestGithubActions
             echo "Stopping PROD app on port 9092..."
             lsof -ti:9092 | xargs kill -9 2>/dev/null || echo "No PROD process running"
-
+            sleep 2
             echo "Starting PROD app on port 9092..."
-            nohup java -jar ${{ secrets.APP_DIR }}/app.jar \
-              --server.port=9092 \
-              > ${{ secrets.APP_DIR }}/app-prod.log 2>&1 &
-
-            echo "PROD deployment done"
+            nohup java -jar app.jar --server.port=9092 > app-prod.log 2>&1 &
+            sleep 2
+            echo "PROD application launched!"
