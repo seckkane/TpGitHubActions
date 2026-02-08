@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: Create-Folders
     steps:
-      # 2.1️⃣ Récupérer le code
+      # 2.1️⃣ Checkout code
       - name: Checkout source code
         uses: actions/checkout@v4
 
@@ -49,11 +49,11 @@ jobs:
       - name: Build with Maven
         run: mvn clean package -DskipTests
 
-      # 2.4️⃣ Renommer le JAR
+      # 2.4️⃣ Renommer le JAR dans target
       - name: Rename JAR
         run: mv target/*.jar target/app.jar
 
-      # 2.5️⃣ Copier le JAR vers DEV ou PROD selon la branche
+      # 2.5️⃣ Copier le JAR directement dans le dossier d'exécution
       - name: Copy JAR to VM
         uses: appleboy/scp-action@v1
         with:
@@ -62,7 +62,7 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.PORT }}
           source: "target/app.jar"
-          target: ${{ github.ref == 'refs/heads/develop' && '/opt/apps/dev/java/TestGithubActions' || '/opt/apps/prod/java/TestGithubActions' }}
+          target: ${{ github.ref == 'refs/heads/develop' && '/opt/apps/dev/java/TestGithubActions/app.jar' || '/opt/apps/prod/java/TestGithubActions/app.jar' }}
 
   # =========================
   # 3️⃣ Lancer l'application sur la VM avec port dynamique
