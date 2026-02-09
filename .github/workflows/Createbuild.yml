@@ -238,18 +238,12 @@ jobs:
       url: http://207.180.240.150:${{ needs.configure.outputs.port }}
 
     steps:
-      # --------------------------------------------------------------------------
-      # Téléchargement de l'artefact compilé
-      # --------------------------------------------------------------------------
       - name: 📥 Download build artifact
         uses: actions/download-artifact@v4
         with:
           name: spring-boot-app
           path: ./artifact
 
-      # --------------------------------------------------------------------------
-      # Vérification de l'artefact téléchargé
-      # --------------------------------------------------------------------------
       - name: 🔍 Verify downloaded artifact
         run: |
           echo "📦 Contenu du répertoire artifact:"
@@ -260,18 +254,9 @@ jobs:
             exit 1
           fi
           
-          if [ -d ./artifact/app.jar ]; then
-            echo "❌ Erreur: app.jar est un dossier, pas un fichier"
-            exit 1
-          fi
-          
           JAR_SIZE=$(du -h ./artifact/app.jar | cut -f1)
           echo "✅ Artefact vérifié (taille: $JAR_SIZE)"
-          file ./artifact/app.jar
 
-      # --------------------------------------------------------------------------
-      # Création et nettoyage du répertoire distant
-      # --------------------------------------------------------------------------
       - name: 📁 Prepare remote directory
         uses: appleboy/ssh-action@v1
         with:
@@ -281,48 +266,27 @@ jobs:
           port: ${{ secrets.PORT }}
           script: |
             APP_DIR="${{ needs.configure.outputs.app-dir }}"
-            
-            echo "🧹 Préparation du répertoire: $APP_DIR"
-            
             mkdir -p "$APP_DIR"
-            rm -rf "$APP_DIR/app.jar" "$APP_DIR/artifact" "$APP_DIR/target"
-            
-            if [ ! -w "$APP_DIR" ]; then
-              echo "❌ Erreur: Pas de permission d'écriture sur $APP_DIR"
-              exit 1
-            fi
-            
-            echo "✅ Répertoire prêt pour le déploiement"
+            rm -rf "$APP_DIR/app.jar" "$APP_DIR/artifact"
+            echo "✅ Répertoire prêt"
 
-      # --------------------------------------------------------------------------
-      # Transfert du JAR avec base64
-      # --------------------------------------------------------------------------
       - name: 📤 Transfer JAR to remote VM
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          
           ssh-keyscan -p ${{ secrets.PORT }} ${{ secrets.HOST }} >> ~/.ssh/known_hosts 2>/dev/null
           
-          echo "📦 Informations sur le fichier source:"
-          ls -lh ./artifact/app.jar
-          file ./artifact/app.jar
-          echo ""
-          
-          echo "📤 Transfert de app.jar vers la VM..."
+          echo "📤 Transfert en cours..."
           base64 ./artifact/app.jar | ssh -i ~/.ssh/deploy_key \
               -p ${{ secrets.PORT }} \
               -o StrictHostKeyChecking=no \
               "${{ secrets.USERNAME }}@${{ secrets.HOST }}" \
               "base64 -d > ${{ needs.configure.outputs.app-dir }}/app.jar"
           
-          echo "✅ Transfert terminé"
           rm -f ~/.ssh/deploy_key
+          echo "✅ Transfert terminé"
 
-      # --------------------------------------------------------------------------
-      # Vérification du transfert
-      # --------------------------------------------------------------------------
       - name: ✅ Verify transfer
         uses: appleboy/ssh-action@v1
         with:
@@ -332,25 +296,12 @@ jobs:
           port: ${{ secrets.PORT }}
           script: |
             APP_DIR="${{ needs.configure.outputs.app-dir }}"
-            
-            echo "🔍 Vérification du fichier transféré..."
-            
             if [ ! -f "$APP_DIR/app.jar" ]; then
-              echo "❌ ERREUR: app.jar introuvable"
-              ls -lah "$APP_DIR"
+              echo "❌ ERREUR: JAR non transféré"
               exit 1
             fi
-            
-            JAR_SIZE=$(du -h "$APP_DIR/app.jar" | cut -f1)
-            echo "✅ Fichier JAR transféré avec succès"
-            echo "   📁 Chemin: $APP_DIR/app.jar"
-            echo "   📦 Taille: $JAR_SIZE"
-            ls -lh "$APP_DIR/app.jar"
-            file "$APP_DIR/app.jar"
+            echo "✅ JAR vérifié: $(du -h $APP_DIR/app.jar | cut -f1)"
 
-      # --------------------------------------------------------------------------
-      # ✅ AMÉLIORATION 2 : Configuration du service systemd
-      # --------------------------------------------------------------------------
       - name: 🔧 Setup systemd service
         uses: appleboy/ssh-action@v1
         with:
@@ -365,66 +316,45 @@ jobs:
             ENV_NAME="${{ needs.configure.outputs.env-name }}"
             SERVICE_NAME="${{ needs.configure.outputs.service-name }}"
             
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "🔧 Configuration du service systemd"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "📝 Service: $SERVICE_NAME"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            # Détection Java
+            JAVA_HOME=$(readlink -f /usr/bin/java | sed "s:/bin/java::")
+            JAVA_BIN=$(which java)
             
-            # Création du fichier service systemd
+            echo "☕ Java: $JAVA_BIN"
+            java -version 2>&1 | head -1
+            
+            # Création service systemd
             sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << EOF
             [Unit]
-            Description=TestGithubActions Spring Boot Application ($ENV_NAME)
+            Description=TestGithubActions Spring Boot ($ENV_NAME)
             After=network.target
             
             [Service]
             Type=simple
             User=$USER
             WorkingDirectory=$APP_DIR
+            Environment="JAVA_HOME=$JAVA_HOME"
+            Environment="PATH=$JAVA_HOME/bin:/usr/local/bin:/usr/bin:/bin"
             
-            # Commande de démarrage
-            ExecStart=/usr/bin/java \\
-              -Xms256m \\
-              -Xmx512m \\
-              -XX:+UseG1GC \\
-              -XX:MaxGCPauseMillis=200 \\
-              -Dspring.profiles.active=$(echo $ENV_NAME | tr '[:upper:]' '[:lower:]') \\
-              -Dspring.main.banner-mode=off \\
-              -Djava.awt.headless=true \\
-              -jar $APP_DIR/app.jar \\
-              --server.port=$PORT
+            ExecStart=$JAVA_BIN -Xms256m -Xmx512m -XX:+UseG1GC -Dspring.profiles.active=$(echo $ENV_NAME | tr '[:upper:]' '[:lower:]') -Dspring.main.banner-mode=off -Djava.awt.headless=true -jar $APP_DIR/app.jar --server.port=$PORT
             
-            # Redémarrage automatique en cas d'erreur
             Restart=on-failure
             RestartSec=10
-            
-            # Délai avant SIGKILL après SIGTERM
             TimeoutStopSec=30
             
-            # Logs
             StandardOutput=append:$APP_DIR/$LOG_FILE
             StandardError=append:$APP_DIR/$LOG_FILE
             
-            # Limites de ressources (optionnel)
             LimitNOFILE=65536
             
             [Install]
             WantedBy=multi-user.target
             EOF
             
-            # Rechargement de systemd
-            echo "🔄 Rechargement de systemd..."
             sudo systemctl daemon-reload
-            
-            # Activation du service au démarrage
-            echo "✅ Activation du service au boot..."
             sudo systemctl enable $SERVICE_NAME
-            
-            echo "✅ Service systemd configuré avec succès"
+            echo "✅ Service configuré"
 
-      # --------------------------------------------------------------------------
-      # Arrêt du service existant
-      # --------------------------------------------------------------------------
       - name: 🛑 Stop existing service
         uses: appleboy/ssh-action@v1
         with:
@@ -434,29 +364,21 @@ jobs:
           port: ${{ secrets.PORT }}
           script: |
             SERVICE_NAME="${{ needs.configure.outputs.service-name }}"
+            PORT="${{ needs.configure.outputs.port }}"
             
-            echo "🔍 Vérification de l'état du service..."
+            # Arrêt service
+            sudo systemctl stop $SERVICE_NAME 2>/dev/null || true
+            sleep 2
             
-            if sudo systemctl is-active --quiet $SERVICE_NAME; then
-              echo "⚠️  Service actif, arrêt en cours..."
-              sudo systemctl stop $SERVICE_NAME
-            
-              # Attente de l'arrêt complet
-              for i in {1..10}; do
-                if ! sudo systemctl is-active --quiet $SERVICE_NAME; then
-                  echo "✅ Service arrêté proprement"
-                  break
-                fi
-                echo "⏳ Attente de l'arrêt... ($i/10)"
-                sleep 1
-              done
-            else
-              echo "ℹ️  Service non actif"
+            # Kill processus sur le port
+            if lsof -ti:$PORT >/dev/null 2>&1; then
+              echo "⚠️  Nettoyage du port $PORT"
+              sudo kill -9 $(lsof -ti:$PORT) 2>/dev/null || true
+              sleep 2
             fi
+            
+            echo "✅ Prêt pour le redémarrage"
 
-      # --------------------------------------------------------------------------
-      # Démarrage du nouveau service
-      # --------------------------------------------------------------------------
       - name: ▶️  Start new service
         uses: appleboy/ssh-action@v1
         with:
@@ -466,35 +388,38 @@ jobs:
           port: ${{ secrets.PORT }}
           script: |
             SERVICE_NAME="${{ needs.configure.outputs.service-name }}"
-            ENV_NAME="${{ needs.configure.outputs.env-name }}"
+            APP_DIR="${{ needs.configure.outputs.app-dir }}"
+            LOG_FILE="${{ needs.configure.outputs.log-file }}"
             PORT="${{ needs.configure.outputs.port }}"
             
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "🚀 Démarrage du service"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "📝 Service      : $SERVICE_NAME"
-            echo "📍 Environnement: $ENV_NAME"
-            echo "🔌 Port         : $PORT"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "🚀 Démarrage de $SERVICE_NAME..."
             
-            # Démarrage du service
+            # Suppression ancien log
+            rm -f "$APP_DIR/$LOG_FILE"
+            
+            # Démarrage
             sudo systemctl start $SERVICE_NAME
-            
-            # Attente du démarrage
-            echo "⏳ Attente du démarrage (15 secondes)..."
             sleep 15
             
-            # Vérification du statut
+            # Vérification
             if sudo systemctl is-active --quiet $SERVICE_NAME; then
-              echo "✅ Service démarré avec succès"
-              echo ""
-              echo "📊 Statut du service:"
-              sudo systemctl status $SERVICE_NAME --no-pager -l
+              echo "✅ Service actif"
+              sudo systemctl status $SERVICE_NAME --no-pager -l | head -20
             else
-              echo "❌ ERREUR: Le service n'a pas démarré"
+              echo "❌ ERREUR: Service inactif"
               echo ""
-              echo "📋 Logs du service:"
-              sudo journalctl -u $SERVICE_NAME -n 50 --no-pager
+              echo "📋 Logs systemd:"
+              sudo journalctl -u $SERVICE_NAME -n 30 --no-pager
+              echo ""
+              echo "📋 Logs applicatifs:"
+              if [ -f "$APP_DIR/$LOG_FILE" ]; then
+                cat "$APP_DIR/$LOG_FILE"
+              else
+                echo "⚠️  Log non créé"
+                echo "🔍 Test manuel:"
+                cd $APP_DIR
+                timeout 5 java -jar app.jar --server.port=$PORT 2>&1 || true
+              fi
               exit 1
             fi
 
