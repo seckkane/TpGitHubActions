@@ -22,15 +22,16 @@ jobs:
 
   # ============================================================================
   # JOB 1 : BUILD & TEST
-  # Compilation du code et création de l'artefact
+  # Compilation du code et exécution des tests
   # ============================================================================
   build:
-    name: 🔨 Build Application
+    name: 🔨 Build & Test Application
     runs-on: ubuntu-latest
 
     outputs:
       artifact-name: ${{ steps.artifact.outputs.name }}
       build-version: ${{ steps.version.outputs.version }}
+      tests-passed: ${{ steps.tests.outputs.passed }}
 
     steps:
       # --------------------------------------------------------------------------
@@ -62,9 +63,68 @@ jobs:
           echo "📦 Version détectée: $VERSION"
 
       # --------------------------------------------------------------------------
-      # Compilation et packaging
+      # ✅ AMÉLIORATION 1 : Exécution des tests automatisés
       # --------------------------------------------------------------------------
-      - name: 🔧 Build with Maven
+      - name: 🧪 Run unit tests
+        id: tests
+        run: |
+          echo "🧪 Exécution des tests unitaires..."
+          
+          # Exécution des tests avec rapport détaillé
+          mvn test -B
+          
+          # Vérification du résultat
+          if [ $? -eq 0 ]; then
+            echo "✅ Tous les tests sont passés"
+            echo "passed=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Des tests ont échoué"
+            echo "passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      # --------------------------------------------------------------------------
+      # Affichage du rapport de tests
+      # --------------------------------------------------------------------------
+      - name: 📊 Display test summary
+        if: always()
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📊 RAPPORT DE TESTS"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          if [ -f target/surefire-reports/*.xml ]; then
+            # Comptage des tests
+            TOTAL=$(grep -r "tests=" target/surefire-reports/*.xml | head -1 | sed 's/.*tests="\([0-9]*\)".*/\1/')
+            FAILURES=$(grep -r "failures=" target/surefire-reports/*.xml | head -1 | sed 's/.*failures="\([0-9]*\)".*/\1/')
+            ERRORS=$(grep -r "errors=" target/surefire-reports/*.xml | head -1 | sed 's/.*errors="\([0-9]*\)".*/\1/')
+            SUCCESS=$((TOTAL - FAILURES - ERRORS))
+          
+            echo "✅ Tests réussis  : $SUCCESS"
+            echo "❌ Tests échoués  : $FAILURES"
+            echo "⚠️  Erreurs       : $ERRORS"
+            echo "📝 Total         : $TOTAL"
+          else
+            echo "ℹ️  Aucun rapport de test disponible"
+          fi
+          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      # --------------------------------------------------------------------------
+      # Upload des rapports de tests
+      # --------------------------------------------------------------------------
+      - name: 📤 Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: target/surefire-reports/
+          retention-days: 30
+
+      # --------------------------------------------------------------------------
+      # Compilation et packaging (après tests réussis)
+      # --------------------------------------------------------------------------
+      - name: 🔧 Build application with Maven
         run: |
           echo "🚀 Démarrage de la compilation..."
           mvn clean package -DskipTests
@@ -119,6 +179,7 @@ jobs:
       log-file: ${{ steps.config.outputs.log-file }}
       env-name: ${{ steps.config.outputs.env-name }}
       branch: ${{ steps.config.outputs.branch }}
+      service-name: ${{ steps.config.outputs.service-name }}
 
     steps:
       # --------------------------------------------------------------------------
@@ -134,11 +195,13 @@ jobs:
             APP_DIR="/opt/apps/dev/java/TestGithubActions"
             PORT="9091"
             LOG_FILE="app-dev.log"
+            SERVICE_NAME="testgithubactions-dev"
           else
             ENV_NAME="PROD"
             APP_DIR="/opt/apps/prod/java/TestGithubActions"
             PORT="9092"
             LOG_FILE="app-prod.log"
+            SERVICE_NAME="testgithubactions-prod"
           fi
           
           # Export des outputs
@@ -147,6 +210,7 @@ jobs:
           echo "port=$PORT" >> $GITHUB_OUTPUT
           echo "log-file=$LOG_FILE" >> $GITHUB_OUTPUT
           echo "branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          echo "service-name=$SERVICE_NAME" >> $GITHUB_OUTPUT
           
           # Affichage récapitulatif
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -157,6 +221,7 @@ jobs:
           echo "📂 Répertoire    : $APP_DIR"
           echo "🔌 Port          : $PORT"
           echo "📄 Log           : $LOG_FILE"
+          echo "🔧 Service       : $SERVICE_NAME"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
   # ============================================================================
@@ -195,7 +260,6 @@ jobs:
             exit 1
           fi
           
-          # Vérification que c'est bien un fichier et non un dossier
           if [ -d ./artifact/app.jar ]; then
             echo "❌ Erreur: app.jar est un dossier, pas un fichier"
             exit 1
@@ -220,13 +284,9 @@ jobs:
             
             echo "🧹 Préparation du répertoire: $APP_DIR"
             
-            # Création du répertoire parent si nécessaire
             mkdir -p "$APP_DIR"
-            
-            # Suppression des anciens fichiers/dossiers problématiques
             rm -rf "$APP_DIR/app.jar" "$APP_DIR/artifact" "$APP_DIR/target"
             
-            # Vérification des permissions
             if [ ! -w "$APP_DIR" ]; then
               echo "❌ Erreur: Pas de permission d'écriture sur $APP_DIR"
               exit 1
@@ -235,26 +295,21 @@ jobs:
             echo "✅ Répertoire prêt pour le déploiement"
 
       # --------------------------------------------------------------------------
-      # Transfert du JAR avec base64 (100% fiable)
+      # Transfert du JAR avec base64
       # --------------------------------------------------------------------------
       - name: 📤 Transfer JAR to remote VM
         run: |
-          # Préparation de la clé SSH
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           
-          # Ajout du host aux known_hosts
           ssh-keyscan -p ${{ secrets.PORT }} ${{ secrets.HOST }} >> ~/.ssh/known_hosts 2>/dev/null
           
-          # Affichage de diagnostic
           echo "📦 Informations sur le fichier source:"
           ls -lh ./artifact/app.jar
           file ./artifact/app.jar
-          du -h ./artifact/app.jar
           echo ""
           
-          # Encodage et transfert via base64 (évite tous les problèmes de SCP)
           echo "📤 Transfert de app.jar vers la VM..."
           base64 ./artifact/app.jar | ssh -i ~/.ssh/deploy_key \
               -p ${{ secrets.PORT }} \
@@ -263,8 +318,6 @@ jobs:
               "base64 -d > ${{ needs.configure.outputs.app-dir }}/app.jar"
           
           echo "✅ Transfert terminé"
-          
-          # Nettoyage
           rm -f ~/.ssh/deploy_key
 
       # --------------------------------------------------------------------------
@@ -281,95 +334,24 @@ jobs:
             APP_DIR="${{ needs.configure.outputs.app-dir }}"
             
             echo "🔍 Vérification du fichier transféré..."
-            echo ""
             
-            # Vérification de l'existence
-            if [ ! -e "$APP_DIR/app.jar" ]; then
-              echo "❌ ERREUR: app.jar n'existe pas"
-              echo "Contenu du répertoire $APP_DIR:"
+            if [ ! -f "$APP_DIR/app.jar" ]; then
+              echo "❌ ERREUR: app.jar introuvable"
               ls -lah "$APP_DIR"
               exit 1
             fi
             
-            # Vérification que c'est un fichier (pas un dossier)
-            if [ -d "$APP_DIR/app.jar" ]; then
-              echo "❌ ERREUR: app.jar est un dossier, pas un fichier"
-              echo "Contenu de app.jar:"
-              ls -lah "$APP_DIR/app.jar"
-              exit 1
-            fi
-            
-            # Vérification que c'est un fichier
-            if [ ! -f "$APP_DIR/app.jar" ]; then
-              echo "❌ ERREUR: app.jar n'est pas un fichier régulier"
-              file "$APP_DIR/app.jar"
-              exit 1
-            fi
-            
-            # Affichage des informations
             JAR_SIZE=$(du -h "$APP_DIR/app.jar" | cut -f1)
             echo "✅ Fichier JAR transféré avec succès"
             echo "   📁 Chemin: $APP_DIR/app.jar"
             echo "   📦 Taille: $JAR_SIZE"
-            echo ""
             ls -lh "$APP_DIR/app.jar"
             file "$APP_DIR/app.jar"
 
       # --------------------------------------------------------------------------
-      # Arrêt de l'ancienne version
+      # ✅ AMÉLIORATION 2 : Configuration du service systemd
       # --------------------------------------------------------------------------
-      - name: 🛑 Stop existing application
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.HOST }}
-          username: ${{ secrets.USERNAME }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: ${{ secrets.PORT }}
-          script: |
-            PORT="${{ needs.configure.outputs.port }}"
-            APP_DIR="${{ needs.configure.outputs.app-dir }}"
-            
-            echo "🔍 Recherche de processus sur le port $PORT..."
-            
-            # Récupération du PID
-            PID=$(lsof -ti:$PORT 2>/dev/null || echo "")
-            
-            if [ -n "$PID" ]; then
-              echo "⚠️  Processus trouvé (PID: $PID)"
-              echo "🛑 Arrêt en cours..."
-            
-              # Tentative d'arrêt gracieux
-              kill -15 $PID 2>/dev/null
-            
-              # Attente de 5 secondes
-              for i in {1..5}; do
-                if ! kill -0 $PID 2>/dev/null; then
-                  echo "✅ Processus arrêté proprement"
-                  break
-                fi
-                echo "⏳ Attente... ($i/5)"
-                sleep 1
-              done
-            
-              # Arrêt forcé si toujours actif
-              if kill -0 $PID 2>/dev/null; then
-                echo "⚠️  Arrêt forcé nécessaire"
-                kill -9 $PID 2>/dev/null
-                sleep 2
-                echo "✅ Processus arrêté (forcé)"
-              fi
-            else
-              echo "ℹ️  Aucun processus actif sur le port $PORT"
-            fi
-            
-            # Nettoyage des logs anciens (garde les 5 derniers)
-            cd $APP_DIR
-            ls -t *.log 2>/dev/null | tail -n +6 | xargs rm -f 2>/dev/null || true
-
-      # --------------------------------------------------------------------------
-      # Démarrage de la nouvelle version avec logs immédiats
-      # --------------------------------------------------------------------------
-      - name: ▶️  Start new application
+      - name: 🔧 Setup systemd service
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.HOST }}
@@ -381,96 +363,140 @@ jobs:
             PORT="${{ needs.configure.outputs.port }}"
             LOG_FILE="${{ needs.configure.outputs.log-file }}"
             ENV_NAME="${{ needs.configure.outputs.env-name }}"
-            
-            cd $APP_DIR || exit 1
+            SERVICE_NAME="${{ needs.configure.outputs.service-name }}"
             
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "🚀 Démarrage de l'application"
+            echo "🔧 Configuration du service systemd"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "📍 Environnement : $ENV_NAME"
-            echo "🔌 Port          : $PORT"
-            echo "📄 Log           : $LOG_FILE"
+            echo "📝 Service: $SERVICE_NAME"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             
-            # Vérification finale du JAR
-            if [ ! -f app.jar ]; then
-              echo "❌ ERREUR CRITIQUE: app.jar introuvable dans $APP_DIR"
-              echo "Contenu du répertoire:"
-              ls -lah
-              exit 1
+            # Création du fichier service systemd
+            sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << EOF
+            [Unit]
+            Description=TestGithubActions Spring Boot Application ($ENV_NAME)
+            After=network.target
+            
+            [Service]
+            Type=simple
+            User=$USER
+            WorkingDirectory=$APP_DIR
+            
+            # Commande de démarrage
+            ExecStart=/usr/bin/java \\
+              -Xms256m \\
+              -Xmx512m \\
+              -XX:+UseG1GC \\
+              -XX:MaxGCPauseMillis=200 \\
+              -Dspring.profiles.active=$(echo $ENV_NAME | tr '[:upper:]' '[:lower:]') \\
+              -Dspring.main.banner-mode=off \\
+              -Djava.awt.headless=true \\
+              -jar $APP_DIR/app.jar \\
+              --server.port=$PORT
+            
+            # Redémarrage automatique en cas d'erreur
+            Restart=on-failure
+            RestartSec=10
+            
+            # Délai avant SIGKILL après SIGTERM
+            TimeoutStopSec=30
+            
+            # Logs
+            StandardOutput=append:$APP_DIR/$LOG_FILE
+            StandardError=append:$APP_DIR/$LOG_FILE
+            
+            # Limites de ressources (optionnel)
+            LimitNOFILE=65536
+            
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+            
+            # Rechargement de systemd
+            echo "🔄 Rechargement de systemd..."
+            sudo systemctl daemon-reload
+            
+            # Activation du service au démarrage
+            echo "✅ Activation du service au boot..."
+            sudo systemctl enable $SERVICE_NAME
+            
+            echo "✅ Service systemd configuré avec succès"
+
+      # --------------------------------------------------------------------------
+      # Arrêt du service existant
+      # --------------------------------------------------------------------------
+      - name: 🛑 Stop existing service
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.PORT }}
+          script: |
+            SERVICE_NAME="${{ needs.configure.outputs.service-name }}"
+            
+            echo "🔍 Vérification de l'état du service..."
+            
+            if sudo systemctl is-active --quiet $SERVICE_NAME; then
+              echo "⚠️  Service actif, arrêt en cours..."
+              sudo systemctl stop $SERVICE_NAME
+            
+              # Attente de l'arrêt complet
+              for i in {1..10}; do
+                if ! sudo systemctl is-active --quiet $SERVICE_NAME; then
+                  echo "✅ Service arrêté proprement"
+                  break
+                fi
+                echo "⏳ Attente de l'arrêt... ($i/10)"
+                sleep 1
+              done
+            else
+              echo "ℹ️  Service non actif"
             fi
+
+      # --------------------------------------------------------------------------
+      # Démarrage du nouveau service
+      # --------------------------------------------------------------------------
+      - name: ▶️  Start new service
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.PORT }}
+          script: |
+            SERVICE_NAME="${{ needs.configure.outputs.service-name }}"
+            ENV_NAME="${{ needs.configure.outputs.env-name }}"
+            PORT="${{ needs.configure.outputs.port }}"
             
-            # Vérification que c'est un fichier
-            if [ -d app.jar ]; then
-              echo "❌ ERREUR CRITIQUE: app.jar est un dossier"
-              exit 1
-            fi
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "🚀 Démarrage du service"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "📝 Service      : $SERVICE_NAME"
+            echo "📍 Environnement: $ENV_NAME"
+            echo "🔌 Port         : $PORT"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             
-            JAR_SIZE=$(du -h app.jar | cut -f1)
-            echo "✅ JAR trouvé: $JAR_SIZE"
+            # Démarrage du service
+            sudo systemctl start $SERVICE_NAME
             
-            # Test que le JAR est exécutable
-            echo ""
-            echo "🔍 Test de validité du JAR..."
-            if ! java -jar app.jar --version 2>&1 | head -5; then
-              echo "⚠️  Commande --version non supportée, test avec unzip..."
-              if ! unzip -t app.jar > /dev/null 2>&1; then
-                echo "❌ ERREUR: Le fichier JAR est corrompu"
-                exit 1
-              fi
-            fi
-            echo "✅ JAR valide"
-            echo ""
-            
-            # Suppression de l'ancien log pour un nouveau démarrage propre
-            rm -f $LOG_FILE
-            
-            # Démarrage avec options JVM optimisées
-            echo "🚀 Lancement de Java..."
-            nohup java \
-              -Xms256m \
-              -Xmx512m \
-              -XX:+UseG1GC \
-              -XX:MaxGCPauseMillis=200 \
-              -Dspring.profiles.active=$(echo $ENV_NAME | tr '[:upper:]' '[:lower:]') \
-              -jar app.jar \
-              --server.port=$PORT \
-              > $LOG_FILE 2>&1 &
-            
-            NEW_PID=$!
-            echo "🆔 PID du nouveau processus: $NEW_PID"
-            
-            # Vérification immédiate que le processus existe
-            sleep 1
-            if ! kill -0 $NEW_PID 2>/dev/null; then
-              echo "❌ ERREUR: Le processus s'est arrêté immédiatement"
-              echo ""
-              echo "📋 Logs de démarrage:"
-              cat $LOG_FILE
-              exit 1
-            fi
-            
-            # Sauvegarde du PID
-            echo $NEW_PID > app.pid
-            
+            # Attente du démarrage
             echo "⏳ Attente du démarrage (15 secondes)..."
             sleep 15
             
-            # Vérification que le processus tourne toujours
-            if ! kill -0 $NEW_PID 2>/dev/null; then
-              echo "❌ ERREUR: Le processus s'est arrêté pendant le démarrage"
+            # Vérification du statut
+            if sudo systemctl is-active --quiet $SERVICE_NAME; then
+              echo "✅ Service démarré avec succès"
               echo ""
-              echo "📋 Logs complets:"
-              cat $LOG_FILE
+              echo "📊 Statut du service:"
+              sudo systemctl status $SERVICE_NAME --no-pager -l
+            else
+              echo "❌ ERREUR: Le service n'a pas démarré"
+              echo ""
+              echo "📋 Logs du service:"
+              sudo journalctl -u $SERVICE_NAME -n 50 --no-pager
               exit 1
             fi
-            
-            echo "✅ Processus toujours actif après 15 secondes"
-            
-            # Affichage des premières lignes du log
-            echo ""
-            echo "📋 Premières lignes du log:"
-            head -20 $LOG_FILE
 
   # ============================================================================
   # JOB 4 : VERIFICATION POST-DEPLOIEMENT
@@ -483,9 +509,9 @@ jobs:
 
     steps:
       # --------------------------------------------------------------------------
-      # Affichage des logs AVANT les vérifications
+      # Vérification du service systemd
       # --------------------------------------------------------------------------
-      - name: 📋 Display startup logs
+      - name: 🔍 Check service health
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.HOST }}
@@ -493,93 +519,38 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.PORT }}
           script: |
-            APP_DIR="${{ needs.configure.outputs.app-dir }}"
-            LOG_FILE="${{ needs.configure.outputs.log-file }}"
-            
-            cd $APP_DIR
-            
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "📋 LOGS DE DEMARRAGE (50 premières lignes)"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            
-            if [ -f $LOG_FILE ]; then
-              head -50 $LOG_FILE
-            else
-              echo "❌ Fichier log introuvable: $LOG_FILE"
-              echo "Contenu du répertoire:"
-              ls -lah
-            fi
-            
-            echo ""
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-      # --------------------------------------------------------------------------
-      # Vérification système (processus, port, fichiers)
-      # --------------------------------------------------------------------------
-      - name: 🔍 System health check
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.HOST }}
-          username: ${{ secrets.USERNAME }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: ${{ secrets.PORT }}
-          script: |
-            APP_DIR="${{ needs.configure.outputs.app-dir }}"
+            SERVICE_NAME="${{ needs.configure.outputs.service-name }}"
             PORT="${{ needs.configure.outputs.port }}"
+            APP_DIR="${{ needs.configure.outputs.app-dir }}"
             LOG_FILE="${{ needs.configure.outputs.log-file }}"
             
-            cd $APP_DIR || exit 1
-            
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "🔍 VERIFICATION SYSTEME"
+            echo "🔍 VERIFICATION DU SERVICE"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             
-            # 1️⃣ Vérification du processus Java
+            # 1️⃣ Vérification du service systemd
             echo ""
-            echo "1️⃣  Processus Java:"
+            echo "1️⃣  Service systemd:"
+            if sudo systemctl is-active --quiet $SERVICE_NAME; then
+              # Récupération des infos du service
+              PID=$(sudo systemctl show -p MainPID --value $SERVICE_NAME)
+              UPTIME=$(ps -p $PID -o etime= | tr -d ' ')
+              MEM=$(ps -p $PID -o rss= | awk '{printf "%.2f MB", $1/1024}')
             
-            # Recherche du processus par PID sauvegardé
-            if [ -f app.pid ]; then
-              SAVED_PID=$(cat app.pid)
-              echo "   📋 PID sauvegardé: $SAVED_PID"
+              echo "   ✅ Service actif"
+              echo "   🆔 PID: $PID"
+              echo "   ⏱️  Uptime: $UPTIME"
+              echo "   💾 Mémoire: $MEM"
             
-              if kill -0 $SAVED_PID 2>/dev/null; then
-                UPTIME=$(ps -p $SAVED_PID -o etime= | tr -d ' ')
-                MEM=$(ps -p $SAVED_PID -o rss= | awk '{printf "%.2f MB", $1/1024}')
-                CMD=$(ps -p $SAVED_PID -o cmd= | head -c 80)
-                echo "   ✅ Processus actif (PID: $SAVED_PID)"
-                echo "   ⏱️  Uptime: $UPTIME"
-                echo "   💾 Mémoire: $MEM"
-                echo "   📝 Commande: $CMD"
-              else
-                echo "   ❌ Le processus PID $SAVED_PID n'existe plus"
-                echo ""
-                echo "   🔍 Recherche d'autres processus Java..."
-                ps aux | grep "[j]ava" || echo "   Aucun processus Java trouvé"
-                echo ""
-                echo "   📋 Dernières lignes du log:"
-                tail -30 $LOG_FILE
-                exit 1
-              fi
+              # Statut détaillé
+              echo ""
+              sudo systemctl status $SERVICE_NAME --no-pager -l | head -15
             else
-              # Recherche alternative par port
-              if ps aux | grep "[j]ava -jar app.jar" | grep -q "server.port=$PORT"; then
-                PID=$(ps aux | grep "[j]ava -jar app.jar" | grep "server.port=$PORT" | awk '{print $2}')
-                UPTIME=$(ps -p $PID -o etime= | tr -d ' ')
-                MEM=$(ps -p $PID -o rss= | awk '{printf "%.2f MB", $1/1024}')
-                echo "   ✅ Processus actif (PID: $PID)"
-                echo "   ⏱️  Uptime: $UPTIME"
-                echo "   💾 Mémoire: $MEM"
-              else
-                echo "   ❌ ERREUR: Aucun processus Java trouvé"
-                echo ""
-                echo "   🔍 Tous les processus Java sur le système:"
-                ps aux | grep "[j]ava" || echo "   Aucun"
-                echo ""
-                echo "   📋 Contenu complet du log:"
-                cat $LOG_FILE 2>/dev/null || echo "   Log introuvable"
-                exit 1
-              fi
+              echo "   ❌ ERREUR: Service inactif"
+              echo ""
+              echo "   📋 Logs d'erreur:"
+              sudo journalctl -u $SERVICE_NAME -n 30 --no-pager
+              exit 1
             fi
             
             # 2️⃣ Vérification du port
@@ -590,56 +561,37 @@ jobs:
               lsof -i:$PORT | grep LISTEN | awk '{print "   🔌 " $1 " (PID: " $2 ")"}'
             else
               echo "   ❌ ERREUR: Port $PORT non accessible"
-              echo ""
-              echo "   🔍 Tous les ports en écoute:"
-              lsof -i -P -n | grep LISTEN | head -20
               exit 1
             fi
             
             # 3️⃣ Vérification des fichiers
             echo ""
-            echo "3️⃣  Fichiers de l'application:"
-            if [ -f app.jar ]; then
-              JAR_SIZE=$(du -h app.jar | cut -f1)
-              JAR_DATE=$(date -r app.jar "+%Y-%m-%d %H:%M:%S")
+            echo "3️⃣  Fichiers:"
+            if [ -f "$APP_DIR/app.jar" ]; then
+              JAR_SIZE=$(du -h "$APP_DIR/app.jar" | cut -f1)
               echo "   ✅ app.jar présent ($JAR_SIZE)"
-              echo "   📅 Date: $JAR_DATE"
-            else
-              echo "   ❌ ERREUR: app.jar introuvable"
-              exit 1
             fi
             
-            if [ -f $LOG_FILE ]; then
-              LOG_SIZE=$(du -h $LOG_FILE | cut -f1)
-              LOG_LINES=$(wc -l < $LOG_FILE)
+            if [ -f "$APP_DIR/$LOG_FILE" ]; then
+              LOG_SIZE=$(du -h "$APP_DIR/$LOG_FILE" | cut -f1)
+              LOG_LINES=$(wc -l < "$APP_DIR/$LOG_FILE")
               echo "   ✅ $LOG_FILE présent ($LOG_SIZE, $LOG_LINES lignes)"
-            else
-              echo "   ⚠️  Fichier log non encore créé"
             fi
             
             # 4️⃣ Analyse des logs
             echo ""
             echo "4️⃣  Analyse des logs:"
-            if [ -f $LOG_FILE ]; then
-              # Recherche d'erreurs critiques
-              if tail -100 $LOG_FILE | grep -qi "error\|exception\|failed"; then
-                echo "   ⚠️  AVERTISSEMENT: Erreurs détectées dans les logs"
-                echo ""
-                echo "   🔴 Erreurs trouvées:"
-                tail -100 $LOG_FILE | grep -i "error\|exception\|failed" | tail -5 | sed 's/^/      /'
-              else
-                echo "   ✅ Aucune erreur critique détectée"
-              fi
-            
-              # Recherche du message de démarrage réussi
-              if tail -100 $LOG_FILE | grep -q "Started.*Application in"; then
-                STARTUP_TIME=$(tail -100 $LOG_FILE | grep "Started.*Application in" | tail -1 | grep -oP '\d+\.\d+(?= seconds)' || echo "N/A")
+            if [ -f "$APP_DIR/$LOG_FILE" ]; then
+              if tail -100 "$APP_DIR/$LOG_FILE" | grep -q "Started.*Application in"; then
+                STARTUP_TIME=$(tail -100 "$APP_DIR/$LOG_FILE" | grep "Started.*Application in" | tail -1 | grep -oP '\d+\.\d+(?= seconds)' || echo "N/A")
                 echo "   ✅ Application démarrée avec succès"
                 echo "   ⚡ Temps de démarrage: ${STARTUP_TIME}s"
+              fi
+            
+              if tail -100 "$APP_DIR/$LOG_FILE" | grep -qi "error\|exception"; then
+                echo "   ⚠️  Erreurs détectées dans les logs"
               else
-                echo "   ⏳ Message de démarrage non trouvé"
-                echo "   📋 Dernières 10 lignes du log:"
-                tail -10 $LOG_FILE | sed 's/^/      /'
+                echo "   ✅ Aucune erreur détectée"
               fi
             fi
             
@@ -664,7 +616,6 @@ jobs:
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo ""
             
-            # Tentatives de connexion (max 10 pour Spring Boot qui peut être long)
             MAX_ATTEMPTS=10
             ATTEMPT=1
             SUCCESS=false
@@ -700,14 +651,13 @@ jobs:
               echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
               echo "❌ ECHEC DU DEPLOIEMENT"
               echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-              echo "L'application ne répond pas après $MAX_ATTEMPTS tentatives"
               exit 1
             fi
 
       # --------------------------------------------------------------------------
-      # Affichage des logs finaux (si échec)
+      # Affichage des logs en cas d'échec
       # --------------------------------------------------------------------------
-      - name: 📋 Display full logs on failure
+      - name: 📋 Display logs on failure
         if: failure()
         uses: appleboy/ssh-action@v1
         with:
@@ -716,43 +666,35 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.PORT }}
           script: |
-            APP_DIR="${{ needs.configure.outputs.app-dir }}"
-            LOG_FILE="${{ needs.configure.outputs.log-file }}"
-            
-            cd $APP_DIR
+            SERVICE_NAME="${{ needs.configure.outputs.service-name }}"
             
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "📋 LOGS COMPLETS DE L'APPLICATION"
+            echo "📋 LOGS DU SERVICE (50 dernières lignes)"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             
-            if [ -f $LOG_FILE ]; then
-              cat $LOG_FILE
-            else
-              echo "❌ Fichier log introuvable: $LOG_FILE"
-              echo ""
-              echo "Contenu du répertoire:"
-              ls -lah
-            fi
+            sudo journalctl -u $SERVICE_NAME -n 50 --no-pager
             
             echo ""
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
   # ============================================================================
   # JOB 5 : NOTIFICATION
-  # Envoyer des notifications en cas de succès/échec
+  # Notification du statut de déploiement
   # ============================================================================
   notify:
     name: 📢 Notify Deployment Status
     runs-on: ubuntu-latest
-    needs: [configure, verify]
+    needs: [configure, build, verify]
     if: always()
 
     steps:
-      - name: 📢 Deployment notification
+      - name: 📢 Deployment summary
         run: |
           ENV_NAME="${{ needs.configure.outputs.env-name }}"
           PORT="${{ needs.configure.outputs.port }}"
           BRANCH="${{ needs.configure.outputs.branch }}"
+          VERSION="${{ needs.build.outputs.build-version }}"
+          SERVICE_NAME="${{ needs.configure.outputs.service-name }}"
           
           if [ "${{ needs.verify.result }}" = "success" ]; then
             STATUS="✅ SUCCES"
@@ -765,10 +707,13 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "$COLOR DEPLOIEMENT $ENV_NAME - $STATUS"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "🌿 Branche  : $BRANCH"
-          echo "📍 Env      : $ENV_NAME"
-          echo "🔌 Port     : $PORT"
-          echo "🌍 URL      : http://207.180.240.150:$PORT"
-          echo "👤 Auteur   : ${{ github.actor }}"
-          echo "📝 Commit   : ${{ github.sha }}"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ISK-SOFTOOLS"
+          echo "🌿 Branche      : $BRANCH"
+          echo "📍 Environnement: $ENV_NAME"
+          echo "📦 Version      : $VERSION"
+          echo "🔌 Port         : $PORT"
+          echo "🔧 Service      : $SERVICE_NAME"
+          echo "🌍 URL          : http://207.180.240.150:$PORT"
+          echo "👤 Auteur       : ${{ github.actor }}"
+          echo "📝 Commit       : ${{ github.sha }}"
+          echo "⏱️  Date         : $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
