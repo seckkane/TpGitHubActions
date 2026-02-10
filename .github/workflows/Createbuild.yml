@@ -4,6 +4,7 @@ name: Java CI/CD with Maven
 # TRIGGERS
 # - develop => DEV (port 9091)
 # - main    => PROD (port 9092)
+# - Avec lancement a la volee - WorkFlowDispatch
 # ==============================================================================
 on:
   push:
@@ -63,7 +64,7 @@ jobs:
           echo "📦 Version détectée: $VERSION"
 
       # --------------------------------------------------------------------------
-      # ✅ AMÉLIORATION 1 : Exécution des tests automatisés
+      # Exécution des tests automatisés
       # --------------------------------------------------------------------------
       - name: 🧪 Run unit tests
         id: tests

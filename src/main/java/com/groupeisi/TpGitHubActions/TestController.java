@@ -25,7 +25,11 @@ public class TestController {
                        new Avis(10, "no way ", 0),
                        new Avis(11, "Before going to bed", 0),
                        new Avis(12, "keep taking a break again", 0),
-                       new Avis(13, "bed now", 0));
+                       new Avis(13, "bed now", 0),
+                       new Avis(14, "Monday Morning for Pray 6H 30", 0),
+                       new Avis(15, "Greve mode actived", 0),
+                       new Avis(16, "Time to have discuss with Paco", 0),
+                       new Avis(17, "This afternoon is for DES THINK", 0));
 
     }
 }
